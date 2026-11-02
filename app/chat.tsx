@@ -25,14 +25,47 @@ export function Chat() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: updatedMessages.slice(-20) }),
+        body: JSON.stringify({
+          messages: updatedMessages.slice(-20).map((currentMessage, index) => ({
+            id: `message-${index}`,
+            role: currentMessage.role,
+            parts: [{ type: "text", text: currentMessage.content }],
+          })),
+        }),
       });
-      const result = (await response.json()) as { reply?: string; error?: string };
-      if (!response.ok || !result.reply) {
+      if (!response.ok) {
+        const result = (await response.json()) as { error?: string };
         setError(result.error ?? "Nie udało się uzyskać odpowiedzi.");
         return;
       }
-      setMessages((currentMessages) => [...currentMessages, { role: "assistant", content: result.reply! }]);
+
+      if (!response.body) throw new Error("Brak strumienia odpowiedzi.");
+      setMessages((currentMessages) => [...currentMessages, { role: "assistant", content: "" }]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let reply = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        reply += decoder.decode(value, { stream: true });
+        setMessages((currentMessages) => {
+          const nextMessages = [...currentMessages];
+          const lastMessage = nextMessages[nextMessages.length - 1];
+          if (lastMessage?.role === "assistant") {
+            nextMessages[nextMessages.length - 1] = { ...lastMessage, content: reply };
+          }
+          return nextMessages;
+        });
+      }
+      reply += decoder.decode();
+      setMessages((currentMessages) => {
+        const nextMessages = [...currentMessages];
+        const lastMessage = nextMessages[nextMessages.length - 1];
+        if (lastMessage?.role === "assistant") {
+          nextMessages[nextMessages.length - 1] = { ...lastMessage, content: reply };
+        }
+        return nextMessages;
+      });
     } catch {
       setError("Nie udało się połączyć z serwerem.");
     } finally {
@@ -57,7 +90,9 @@ export function Chat() {
             {currentMessage.content}
           </p>
         ))}
-        {busy && <p className="message assistant">Piszę odpowiedź…</p>}
+        {busy && messages[messages.length - 1]?.role === "user" && (
+          <p className="message assistant">Piszę odpowiedź…</p>
+        )}
       </section>
       <form className="composer" onSubmit={handleSubmit}>
         <input

@@ -1,3 +1,5 @@
+import { createOpenAI } from "@ai-sdk/openai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { NextResponse } from "next/server";
 import { hasValidSession } from "@/lib/auth";
 
@@ -29,70 +31,61 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Rozmowa musi zawierać od 1 do 20 wiadomości." }, { status: 400 });
   }
 
-  const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+  const messages: UIMessage[] = [];
   let totalLength = 0;
   for (const item of rawMessages) {
     if (
       typeof item !== "object" ||
       item === null ||
       !("role" in item) ||
-      !("content" in item) ||
+      !("parts" in item) ||
       (item.role !== "user" && item.role !== "assistant") ||
-      typeof item.content !== "string"
+      !Array.isArray(item.parts)
     ) {
       return NextResponse.json({ error: "Nieprawidłowa wiadomość." }, { status: 400 });
     }
-    const content = item.content.trim();
-    if (!content || content.length > 4000) {
+
+    const textParts: string[] = [];
+    for (const part of item.parts as unknown[]) {
+      if (
+        typeof part === "object" &&
+        part !== null &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part &&
+        typeof part.text === "string"
+      ) {
+        textParts.push(part.text);
+      }
+    }
+    const text = textParts.join("").trim();
+    if (!text || text.length > 4000) {
       return NextResponse.json({ error: "Wiadomość musi mieć od 1 do 4000 znaków." }, { status: 400 });
     }
-    totalLength += content.length;
+    totalLength += text.length;
     if (totalLength > 12000) {
       return NextResponse.json({ error: "Rozmowa jest za długa. Rozpocznij nową." }, { status: 400 });
     }
-    messages.push({ role: item.role, content });
-  }
-
-  try {
-    const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ model, messages, max_tokens: 512 }),
-      signal: AbortSignal.timeout(30_000),
-      cache: "no-store",
+    messages.push({
+      id: `message-${messages.length}`,
+      role: item.role,
+      parts: [{ type: "text", text }],
     });
-
-    if (!upstream.ok) {
-      return NextResponse.json({ error: "OpenRouter nie przyjął zapytania. Sprawdź model i klucz API." }, { status: 502 });
-    }
-
-    const result: unknown = await upstream.json();
-    if (
-      typeof result !== "object" ||
-      result === null ||
-      !("choices" in result) ||
-      !Array.isArray(result.choices)
-    ) {
-      return NextResponse.json({ error: "OpenRouter zwrócił nieoczekiwaną odpowiedź." }, { status: 502 });
-    }
-    const firstChoice = result.choices[0];
-    if (
-      typeof firstChoice !== "object" ||
-      firstChoice === null ||
-      !("message" in firstChoice) ||
-      typeof firstChoice.message !== "object" ||
-      firstChoice.message === null ||
-      !("content" in firstChoice.message) ||
-      typeof firstChoice.message.content !== "string"
-    ) {
-      return NextResponse.json({ error: "Model nie zwrócił tekstowej odpowiedzi." }, { status: 502 });
-    }
-
-    return NextResponse.json({ reply: firstChoice.message.content });
-  } catch {
-    return NextResponse.json({ error: "Nie udało się połączyć z OpenRouter." }, { status: 502 });
   }
+
+  const openrouter = createOpenAI({
+    apiKey,
+    baseURL: "https://openrouter.ai/api/v1",
+    name: "openrouter",
+  });
+
+  const result = streamText({
+    model: openrouter(model),
+    messages: await convertToModelMessages(messages),
+    maxOutputTokens: 512,
+  });
+
+  return result.toTextStreamResponse({
+    headers: { "Cache-Control": "no-cache, no-transform" },
+  });
 }
