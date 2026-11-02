@@ -56,6 +56,7 @@ export function Chat() {
           }
           return nextMessages;
         });
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
       reply += decoder.decode();
       setMessages((currentMessages) => {
