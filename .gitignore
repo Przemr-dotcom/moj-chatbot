@@ -1,0 +1,19 @@
+node_modules/
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+
+# Local environment files. Keep only the blank example in Git.
+.env*
+!.env.example
+env.local
+env.*.local
+
+.vercel/
+*.pem
+
+# Local scratch files and logs.
+/work/
+*.log
